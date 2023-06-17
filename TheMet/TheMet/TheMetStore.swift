@@ -41,15 +41,36 @@ class TheMetStore: ObservableObject {
     self.maxIndex = maxIndex
   }
 
-  func fetchObjects(for queryTerm: String) async throws {
-    if let objectIDs = try await service.getObjectIDs(from: queryTerm) {  // 1
-      for (index, objectID) in objectIDs.objectIDs.enumerated()  // 2
-      where index < maxIndex {
-        if let object = try await service.getObject(from: objectID) {
-          await MainActor.run {
-            objects.append(object)
+  func getResponseStream(for queryTerm: String) async throws -> AsyncStream<Object> {
+    if let objectIDs = try await service.getObjectIDs(from: queryTerm) {
+      return AsyncStream(Object.self) { continuation in
+        for (index, objectID) in objectIDs.objectIDs.enumerated()
+        where index < self.maxIndex {
+          Task {
+            do {
+              if let object = try await self.service.getObject(from: objectID) {
+                continuation.yield(object)
+              }
+            } catch {
+              // Error is printed and the task continues to the next object
+              print("Error fetching object: \(error)")
+            }
           }
         }
+        continuation.onTermination = { _ in }
+      }
+    } else {
+      return AsyncStream(Object.self) { continuation in
+        continuation.finish()
+      }
+    }
+  }
+
+  func fetchObjects(for queryTerm: String) async throws {
+    let stream = try await getResponseStream(for: queryTerm)
+    for await object in stream {
+      await MainActor.run {
+        objects.append(object)
       }
     }
   }
