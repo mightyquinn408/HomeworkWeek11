@@ -42,36 +42,41 @@ class TheMetStore: ObservableObject {
   }
 
   func getResponseStream(for queryTerm: String) async throws -> AsyncStream<Object> {
-    if let objectIDs = try await service.getObjectIDs(from: queryTerm) {
-      return AsyncStream(Object.self) { continuation in
-        for (index, objectID) in objectIDs.objectIDs.enumerated()
-        where index < self.maxIndex {
-          Task {
-            do {
-              if let object = try await self.service.getObject(from: objectID) {
-                continuation.yield(object)
+    let service = self.service
+    let maxIndex = self.maxIndex
+    return AsyncStream(Object.self) { continuation in
+      Task {
+        do {
+          if let objectIDs = try await service.getObjectIDs(from: queryTerm) {
+            for objectID in objectIDs.objectIDs.prefix(maxIndex) {
+              do {
+                if let object = try await service.getObject(from: objectID) {
+                  continuation.yield(object)
+                }
+              } catch {
+                print("Error fetching object: \(error)")
               }
-            } catch {
-              // Error is printed and the task continues to the next object
-              print("Error fetching object: \(error)")
             }
           }
+          continuation.finish()
+        } catch {
+          print("Error fetching object IDs: \(error)")
+          continuation.finish()
         }
-        continuation.onTermination = { _ in }
-      }
-    } else {
-      return AsyncStream(Object.self) { continuation in
-        continuation.finish()
       }
     }
   }
 
-  func fetchObjects(for queryTerm: String) async throws {
-    let stream = try await getResponseStream(for: queryTerm)
-    for await object in stream {
-      await MainActor.run {
-        objects.append(object)
+  func fetchObjects(for queryTerm: String) async {
+    do {
+      let stream = try await getResponseStream(for: queryTerm)
+      for await object in stream {
+        await MainActor.run {
+          self.objects.append(object)
+        }
       }
+    } catch {
+      print("Error fetching objects: \(error)")
     }
   }
 }
